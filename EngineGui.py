@@ -8,7 +8,7 @@ class GuiElements:
         self.manager = manager
         self.funcs = funcs
 
-        self.utwindow = gui.elements.UIWindow(pygame.Rect(1000,10,230,140), self.manager, "Utilities", resizable = True)
+        self.utwindow = gui.elements.UIWindow(pygame.Rect(1000,10,230,350), self.manager, "Utilities", resizable = True)
         self.nodetreewindow = gui.elements.UIWindow(pygame.Rect(1000,170,300,500), self.manager, "Node Tree", resizable = True)
         self.propertieswindow = gui.elements.UIWindow(pygame.Rect(10,70,300,300), self.manager, "Properties", resizable = True, visible = 0)
         self.propertylist = []
@@ -18,7 +18,7 @@ class GuiElements:
         self.quitbutton = gui.elements.UIButton(pygame.Rect(10,10,100,40),"Exit",self.manager)
 
         self.startbutton = gui.elements.UIButton(pygame.Rect(10,10,100,40),"Start",self.manager,self.utwindow)
-        options = ["node","sprite","camera","movement","background","backgroundimage","rectangle","text","timer"]
+        options = ["node","sprite","camera","movement","background","backgroundimage","rectangle","text","timer","collisionrect"]
         self.addobject = gui.elements.UIDropDownMenu(options_list = options, relative_rect = pygame.Rect(120,10,100,40), manager = self.manager, starting_option = "node",container = self.utwindow)
         self.addbutton = gui.elements.UIButton(pygame.Rect(10,60,100,40), "Add Object", self.manager,self.utwindow)
         self.delbutton = gui.elements.UIButton(pygame.Rect(120,60,100,40),"Delete",self.manager,self.utwindow)
@@ -33,7 +33,7 @@ class GuiElements:
         self.colorpicker = None
 
         self.scriptwindow = gui.elements.UIWindow(pygame.Rect(10,70,400,350), self.manager, "Write Script",resizable = True,visible = 1)
-        self.scriptbox = gui.elements.UITextEntryBox(pygame.Rect(10,50,380,260), manager = self.manager, container = self.scriptwindow)
+        self.scriptbox = gui.elements.UITextEntryBox(pygame.Rect(10,50,380,260), manager = self.manager, container = self.scriptwindow, anchors = {"left": "left", "right": "right", "top": "top", "bottom": "bottom"})
         self.scriptnametext = gui.elements.UITextEntryLine(pygame.Rect(10,5,150,40), self.manager, self.scriptwindow)
         self.scriptsavebutton = gui.elements.UIButton(pygame.Rect(170,5,100,40), "Save Script", self.manager, self.scriptwindow)
         self.openscriptbutton = gui.elements.UIButton(pygame.Rect(280,5,100,40), "Open Script", self.manager, self.scriptwindow)
@@ -69,7 +69,7 @@ class GuiElements:
                 elif event.ui_element == self.utbutton and not self.utwindow.visible:
                     self.utwindow = gui.elements.UIWindow(pygame.Rect(1000,10,230,140), self.manager, "Utilities", resizable = True)
                     self.startbutton = gui.elements.UIButton(pygame.Rect(10,10,100,40),"Start",self.manager,self.utwindow)
-                    options = ["node","sprite","camera","movement","background","rectangle","text"]
+                    options = ["node","sprite","camera","movement","background","rectangle","text","timer","collisionrect"]
                     self.addobject = gui.elements.UIDropDownMenu(options_list = options, relative_rect = pygame.Rect(120,10,100,40), manager = self.manager, starting_option = "node",container = self.utwindow)
                     self.addbutton = gui.elements.UIButton(pygame.Rect(10,60,100,40), "Add Object", self.manager,self.utwindow)
                     self.delbutton = gui.elements.UIButton(pygame.Rect(120,60,100,40),"Delete",self.manager,self.utwindow)
@@ -79,7 +79,7 @@ class GuiElements:
                 
                 elif event.ui_element == self.scbutton and not self.scriptwindow.visible:
                     self.scriptwindow = gui.elements.UIWindow(pygame.Rect(10,70,400,350), self.manager, "Write Script",resizable = True,visible = 1)
-                    self.scriptbox = gui.elements.UITextEntryBox(pygame.Rect(10,50,380,260), manager = self.manager, container = self.scriptwindow)
+                    self.scriptbox = gui.elements.UITextEntryBox(pygame.Rect(10,50,380,260), manager = self.manager, container = self.scriptwindow, anchors = {"left": "left", "right": "right", "top": "top", "bottom": "bottom"})
                     self.scriptnametext = gui.elements.UITextEntryLine(pygame.Rect(10,5,150,40), self.manager, self.scriptwindow)
                     self.scriptsavebutton = gui.elements.UIButton(pygame.Rect(170,5,100,40), "Save Script", self.manager, self.scriptwindow)
                     self.openscriptbutton = gui.elements.UIButton(pygame.Rect(280,5,100,40), "Open Script", self.manager, self.scriptwindow)
