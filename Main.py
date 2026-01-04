@@ -1,3 +1,4 @@
+from __future__ import annotations
 import pygame
 import pygame_gui as gui
 import copy
@@ -10,6 +11,8 @@ from tkinter import simpledialog
 import os
 import random
 import jsonpickle
+import math
+from types import SimpleNamespace
 import sys
 
 pygame.init()
@@ -49,6 +52,52 @@ def askinput(title,message):
     userinput = simpledialog.askstring(title = title, prompt = message)
     return userinput
 
+#2D Vector data type
+class Vector:
+    def __init__(self, x: int, y: int):
+        self.x = x
+        self.y = y
+    
+    def distance_to(self, othervec: Vector):
+        return math.sqrt((othervec.x - self.x) ** 2 + (othervec.y - self.y) ** 2)
+
+    def dot(self, othervec: Vector):
+        return self.x * othervec.x + self.y + othervec.y
+
+    def __sub__(self,othervec):
+        if isinstance(othervec, Vector):
+            return Vector(self.x - othervec.x, self.y - othervec.y)
+        return NotImplemented
+    
+    def __isub__(self,othervec):
+        if isinstance(othervec, Vector):
+            self.x -= othervec.x
+            self.y -= othervec.y
+            return self
+        return NotImplemented
+    
+    def __add__(self,othervec):
+        if isinstance(othervec, Vector):
+            return Vector(self.x + othervec.x, self.y + othervec.y)
+        return NotImplemented
+    
+    def __iadd__(self,othervec):
+        if isinstance(othervec, Vector):
+            self.x += othervec.x
+            self.y += othervec.y
+            return self
+        return NotImplemented
+
+class DataGrid:
+    def __init__(self,columns,rows,startval = 0):
+        self.grid = [[startval for x in range(columns)] for y in range(rows)]
+
+    def get_at(self,x,y):
+        return self.grid[y][x]
+    def set_at(self,x,y,value):
+        self.grid[y][x] = value
+
+# Scene class
 class Scene():
     def __init__(self,rootnode,maincamera,name):
         self.rootnode = rootnode
@@ -59,7 +108,17 @@ class Scene():
         scenenames.append(self.name)
 
     def update(self,running = True):
+        # get all collisionrectnodes
+        allrects = []
+        getallrects(self.rootnode,allrects)
+
+        # main update pass
         self.rootnode.update()
+        self.rootnode.factorpos()
+        if running:
+            self.rootnode.resolve_collisions(allrects)
+        self.rootnode.factorpos()
+
         if not running:
             self.save = copy.deepcopy(self.rootnode)
 
@@ -74,20 +133,20 @@ class Scene():
     def reset(self):
         self.rootnode = copy.deepcopy(self.save)
 
+# Base class for all node types
 class Node:
     def __init__(self, parent = None, x = 0, y = 0):
         self.parent = parent
         self.name = self.__class__.__name__
         self.children = []
-        self.wx = x
-        self.wy = y
-        self.sx = (self.wx - self.parent.wx) if self.parent else x
-        self.sy = (self.wy - self.parent.wy) if self.parent else y
-        self.rx = (self.wx + mainscene.maincamera.ox) if mainscene.maincamera else self.wx
-        self.ry = (self.wy + mainscene.maincamera.oy) if mainscene.maincamera else self.wy
+
+        self.position = Vector(0,0)
+        self.subpos = self.position - self.parent.position if self.parent else copy.copy(self.position)
+        self.renderpos = self.position + mainscene.maincamera.offsetpos if mainscene.maincamera else copy.copy(self.position)
+
         self.expanded = True
         self.scriptname = None
-        self.properties = {"wx": int,"wy": int,"name": str,"scriptname": str,"does_collide": bool}
+        self.properties = {"x": int,"y": int,"name": str,"scriptname": str,"does_collide": bool}
         self.started = False
         self.colliding = False
         self.does_collide = False
@@ -110,8 +169,6 @@ class Node:
         return self.children
 
     def update(self):
-        mainscene.rootnode.factorpos()
-
         if gamerunning:
             if self.scriptname and self.scriptname in scripts:
                 scriptobj = scripts[self.scriptname]
@@ -132,13 +189,9 @@ class Node:
         else:
             self.started = False
 
-        mainscene.rootnode.factorpos()
-
         if isinstance(self,MovementNode):
             if gamerunning:
-                self.translate(self.xvel,self.yvel)
-        
-        mainscene.rootnode.factorpos()
+                self.translate(self.velocity)
         
         if isinstance(self,TimerNode):
             if gamerunning:
@@ -151,92 +204,66 @@ class Node:
             else:
                 self.activated = False
                 self.fulltime = 0
-        
-        mainscene.rootnode.factorpos()
-        
-        if isinstance(self,CollisionRectNode):
-            self.worldrect = pygame.Rect(self.wx,self.wy,self.width,self.height)
-        
-        if self.does_collide and gamerunning:
-            self.collide()
-        
-        mainscene.rootnode.factorpos()
-
-        if isinstance(self,CollisionRectNode):
-            self.renderrect = pygame.Rect(self.rx,self.ry,self.width,self.height)
 
         for child in self.children:
             child.update()
 
     def draw(self):
         if not gamerunning:
-            pygame.draw.circle(screen, (64,214,237) if (self in selected) else (255,255,255), (self.rx,self.ry),5)
+            pygame.draw.circle(screen, (64,214,237) if (self in selected) else (255,255,255), (self.renderpos.x, self.renderpos.y), 5)
 
         for child in self.children:
             child.draw()
 
-    def addchild(self,child):
+    def addchild(self,child: Node):
         self.children.append(child)
         child.parent = self
-        child.sx = child.wx - self.wx
-        child.sy = child.wy - self.wy
+        child.subpos = Vector(child.position.x - self.position.x, child.position.y - self.position.y)
         mainscene.update(gamerunning)
     
     def factorpos(self,mode = 0):
         if mode == 0:
-            if self.parent:
-                self.wx = self.parent.wx + self.sx
-                self.wy = self.parent.wy + self.sy
-            else:
-                self.wx = self.sx
-                self.wy = self.sy
+            self.position = self.parent.position + self.subpos if self.parent else copy.copy(self.subpos)
         elif mode == 1:
-            if self.parent:
-                self.sx = self.wx - self.parent.wx
-                self.sy = self.wy - self.parent.wy
-            else:
-                self.sx = self.wx
-                self.sx = self.wx
+            self.subpos = self.position - self.parent.position if self.parent else copy.copy(self.position)
 
-        self.rx = self.wx + mainscene.maincamera.ox if mainscene.maincamera else self.wx
-        self.ry = self.wy + mainscene.maincamera.oy if mainscene.maincamera else self.wy
+        self.renderpos = self.position + mainscene.maincamera.offsetpos if mainscene.maincamera else copy.copy(self.position)
 
         if isinstance(self,CollisionRectNode):
-            self.worldrect = pygame.Rect(self.wx,self.wy,self.width,self.height)
-            self.renderrect = pygame.Rect(self.rx,self.ry,self.width,self.height)
+            self.worldrect = pygame.Rect(self.position.x, self.position.y, self.width, self.height)
+            self.renderrect = pygame.Rect(self.renderpos.x, self.renderpos.y, self.width, self.height)
         
         if isinstance(self,CameraNode):
-            self.ox = -self.wx + winwidth / 2
-            self.oy = -self.wy + winheight / 2
+            self.offsetpos.x = -self.position.x + winwidth / 2
+            self.offsetpos.y = -self.position.y + winheight / 2
 
         for child in self.children:
             child.factorpos()
 
-    def translate(self, x, y):
-        self.sx += x
-        self.sy += y
-        self.factorpos()
+    def translate(self, x: int | Vector, y: int | None = None):
+        if isinstance(x, Vector):
+            self.subpos += x
+        elif isinstance(x,int) and isinstance(y,int):
+            self.subpos += Vector(x,y)
 
     def setpos(self, x, y):
-        self.wx = x
-        self.wy = y
+        self.position = Vector(x,y)
         self.factorpos(1)
     
-    def collide(self):
+    # collide nodes with a hitbox dictated by collisionrectnode
+    def collide(self, allrects):
         self.colliding = False
 
         if self.children:
             for child in self.children:
                 if isinstance(child,CollisionRectNode):
-                    allrects = []
-                    getallrects(mainscene.rootnode,allrects)
                     noderects = nodetorect(allrects)
                     childrect = child.worldrect
                     child.collide_dirs = []
 
                     collisionindexes = childrect.collidelistall(noderects)
                     for cindex in collisionindexes:
-                        if allrects[cindex] is not child and allrects[cindex].enabled:
+                        if allrects[cindex] is not child and allrects[cindex].enabled and self.does_collide:
                             colliderect = noderects[cindex]
                             overlapx = min(childrect.right,colliderect.right) - max(childrect.left,colliderect.left)
                             overlapy = min(childrect.bottom,colliderect.bottom) - max(childrect.top,colliderect.top)
@@ -256,14 +283,18 @@ class Node:
                                     self.translate(0, overlapy)
                                     child.collide_dirs.append("up")
 
-                    child.colliding = len(child.collide_dirs) > 0
-                    if child.colliding:
-                        self.colliding = True
-                try:
-                    child.collide()
-                except Exception:
-                    pass
+                    self.colliding = len(child.collide_dirs) > 0
         self.factorpos()
+    
+    # resolve collisions with node and its children
+    def resolve_collisions(self, allrects):
+        if self.does_collide:
+            self.collide(allrects)
+        for child in self.children:
+            child.resolve_collisions(allrects)
+    
+    def instance(self):
+        return copy.deepcopy(self)
 
     def delete(self):
         for child in self.children[:]:
@@ -286,22 +317,20 @@ class SpriteNode(Node):
 
     def draw(self):
         if self.imagepath:
-            screen.blit(pygame.transform.smoothscale(imagenames[self.imagepath], (self.width,self.height)), (self.rx,self.ry))
+            screen.blit(pygame.transform.smoothscale(imagenames[self.imagepath], (self.width,self.height)), (self.renderpos.x, self.renderpos.y))
 
         super().draw()
 
 class CameraNode(Node):
     def __init__(self,parent = None,x = 0, y = 0):
         super().__init__(parent,x,y)
-        self.ox = -self.wx + winwidth / 2
-        self.oy = -self.wy + winheight / 2
+        self.offsetpos = Vector(-self.position.x + winwidth / 2, -self.position.y + winheight / 2)
         self.startcam = False
 
 class MovementNode(Node):
     def __init__(self, parent = None, x = 0, y = 0, xvel = 0, yvel = 0):
         super().__init__(parent, x, y)
-        self.xvel = xvel
-        self.yvel = yvel
+        self.velocity = Vector(0,0)
         self.properties.update({"xvel": int,"yvel": int})
 
 class BackgroundNode(Node):
@@ -313,10 +342,10 @@ class BackgroundNode(Node):
     def draw(self):
         if self.parent:
             if isinstance(self.parent,SpriteNode):
-                ps = pygame.Surface((self.parent.width,self.parent.height))
+                ps = pygame.Surface((self.parent.width, self.parent.height))
                 ps.fill(self.color)
 
-                screen.blit(ps,(self.parent.rx,self.parent.ry))
+                screen.blit(ps,(self.parent.renderpos.x,self.parent.renderpos.y))
             else:
                 ps = pygame.Surface((winwidth,winheight))
                 ps.fill(self.color)
@@ -345,7 +374,7 @@ class RectangleNode(Node):
         self.properties.update({"width": int,"height": int,"color": str})
     
     def draw(self):
-        pygame.draw.rect(screen,self.color,pygame.Rect(self.rx,self.ry,self.width,self.height))
+        pygame.draw.rect(screen, self.color, pygame.Rect(self.renderpos.x, self.renderpos.y, self.width,self.height))
         super().draw()
 
 class TextNode(Node):
@@ -357,7 +386,7 @@ class TextNode(Node):
         self.properties.update({"text": str,"color": str,"size": int})
     
     def draw(self):
-        drawtext(self.text,self.rx,self.ry,self.size,self.color,screen)
+        drawtext(self.text, self.renderpos.x, self.renderpos.x, self.size, self.color, screen)
         super().draw()
 
 class TimerNode(Node):
@@ -373,8 +402,8 @@ class CollisionRectNode(Node):
         super().__init__(parent,x,y)
         self.width = width
         self.height = height
-        self.worldrect = pygame.Rect(self.wx,self.wy,self.width,self.height)
-        self.renderrect = pygame.Rect(self.rx,self.ry,self.width,self.height)
+        self.worldrect = pygame.Rect(self.position.x, self.position.y, self.width, self.height)
+        self.renderrect = pygame.Rect(self.renderpos.x, self.renderpos.y, self.width, self.height)
         self.enabled = False
         self.properties.update({"width": int,"height": int,"enabled": bool})
         self.collide_dirs = []
@@ -418,11 +447,11 @@ def keypressed(key: str):
     keycode = getattr(pygame,f"K_{key.upper() if len(key) > 1 else key}",None)
     return keys[keycode] if keycode else False
 
-def get_mouse_pos(screen = False):
+def get_mouse_pos(screen: bool = False):
     mx,my = pygame.mouse.get_pos()
     if mainscene.maincamera and not screen:
-        mx -= maincamera.ox
-        my -= maincamera.oy
+        mx -= maincamera.offsetpos.x
+        my -= maincamera.offsetpos.y
     
     return mx,my
 
@@ -432,9 +461,9 @@ def get_main_scene():
 def get_root_node():
     return mainscene.rootnode
 
-def random_number(start = 0,stop = 10):
+def random_number(start: int = 0, stop: int = 10):
     return random.randint(start,stop)
-def random_float(start = 0.0,stop = 10.0):
+def random_float(start: float = 0.0, stop: float = 10.0):
     return random.uniform(start,stop)
 
 def searchstring(string,instring):
@@ -485,7 +514,7 @@ def addnode():
     newnode = cnode(parent = None,x = 0,y = 0)
     if selected:
         selected[0].addchild(newnode)
-        selected[0].children[-1].setpos(selected[0].wx,selected[0].wy)
+        selected[0].children[-1].setpos(selected[0].position.x, selected[0].position.y)
     else:
         mainscene.addnode(newnode,gamerunning)
 
@@ -514,11 +543,16 @@ def changeprop(value: str,convert: str):
     elif type(newvalue) == str and len(newvalue) == 0:
         errormessage("no data was given")
     else:
-        if convert == "wx" or convert == "wy":
-            if convert == "wx":
-                sn.setpos(int(newvalue),sn.wy)
-            elif convert == "wy":
-                sn.setpos(sn.wx,int(newvalue))
+        if convert == "x" or convert == "y":
+            if convert == "x":
+                sn.setpos(int(newvalue),sn.position.y)
+            elif convert == "y":
+                sn.setpos(sn.position.x,int(newvalue))
+        if convert == "xvel" or convert == "yvel":
+            if convert == "xvel":
+                sn.velocity.x = int(newvalue)
+            if convert == "yvel":
+                sn.velocity.y = int(newvalue)
 
         elif convert == "imagepath":
             if newvalue == "None":
@@ -564,6 +598,13 @@ def addscript(scriptname: str):
             module.get_mouse_pos = get_mouse_pos
             module.random_number = random_number
             module.random_float = random_float
+
+            nodeclasses = SimpleNamespace()
+            for key,value in nodetypes.items():
+                setattr(nodeclasses,key,value)
+            module.nodetypes = nodeclasses
+            module.Vector = Vector
+            module.DataGrid = DataGrid
 
             scripts[scriptname] = module
         except Exception as e:
@@ -692,7 +733,7 @@ def drawnodetree(node: Node,x,y,clickrects):
     screen.blit(nodetreesurface,(nodetreerect.x,nodetreerect.y))
     return currenty + 15
 
-def setproperties(node: Node):
+def startprop(node: Node):
     objprop = list(node.properties.keys())[:]
 
     for el in guielements.propertylist:
@@ -707,16 +748,20 @@ def setproperties(node: Node):
 
     for i in range(len(objprop)):
         temp = f"{objprop[i]}:"
-        temp = temp[1:] if temp == "wx:" or temp == "wy:" else temp
         proptext = objprop[i]
-        objprop[i] = getattr(node,objprop[i])
+        if objprop[i] == "x":
+            objprop[i] = node.position.x
+        elif objprop[i] == "y":
+            objprop[i] = node.position.y
+        elif objprop[i] == "xvel":
+            objprop[i] = node.velocity.x
+        elif objprop[i] == "yvel":
+            objprop[i] = node.velocity.y
+        else:
+            objprop[i] = getattr(node,proptext)
 
         pt = gui.elements.UILabel(pygame.Rect(0, i * 40 + 5, len(temp) * 9.5, 40), temp, guielements.manager, guielements.propertieswindow)
         ce = gui.elements.UITextEntryLine(pygame.Rect(len(temp) * 9.5, i * 40 + 5, 100, 40), guielements.manager, guielements.propertieswindow, initial_text = str(objprop[i]))
-
-        if proptext == "imagepath":
-            sb = gui.elements.UIButton(pygame.Rect(len(temp) * 9.5 + 110, i * 40 + 5, 100, 40), "Upload File", guielements.manager, guielements.propertieswindow)
-            guielements.prbuttons.append(sb)
 
         guielements.propertylist.append(ce)
         guielements.prlabels.append(pt)
@@ -726,7 +771,7 @@ def setmainprop():
     global guielements
 
     if len(selected) == 1 and guielements.propertieswindow.visible:
-        setproperties(selected[0])
+        startprop(selected[0])
     else:
         for el in guielements.propertylist:
             el.kill()
@@ -738,6 +783,29 @@ def setmainprop():
         guielements.prlabels = []
         guielements.prbuttons = []
         guielements.propertieswindow.set_display_title("Properties")
+
+def setproperties(node: Node):
+    objproperties = list(node.properties.keys())[:]
+    for i in range(len(guielements.propertylist)):
+        el = guielements.propertylist[i]
+        if not el.is_focused:
+            propname = objproperties[i]
+            textset = ""
+
+            if propname == "x":
+                textset = node.position.x
+            elif propname == "y":
+                textset = node.position.y
+            elif propname == "xvel":
+                textset = node.velocity.x
+            elif propname == "yvel":
+                textset = node.velocity.y
+            else:
+                textset = getattr(node,propname)
+            textset = str(textset)
+            el.set_text(textset)
+
+    guielements.propertieswindow.set_display_title(f"Properties - {node.name}")
 
 def setfocused():
     global textfocused
@@ -757,8 +825,8 @@ def setfocused():
 
 def selectnodes(node: Node):
     mx,my = pygame.mouse.get_pos()
-    mousepos = pygame.math.Vector2(mx,my)
-    nodepos = pygame.math.Vector2(node.rx,node.ry)
+    mousepos = Vector(mx,my)
+    nodepos = Vector(node.renderpos.x, node.renderpos.y)
     
     if nodepos.distance_to(mousepos) <= 5:
         if node in selected:
@@ -836,11 +904,6 @@ def main():
                                 selected.append(node)
                             setmainprop()
                             setfocused()
-
-            elif event.type == pygame.KEYDOWN and textfocused:
-                if event.key == pygame.K_TAB:
-                    fe = setfocused()
-                    fe.set_text(fe.get_text() + "   ")
             
             elif event.type == pygame.KEYUP and not textfocused:
                 if event.key == pygame.K_m and len(selected) > 0:
@@ -851,7 +914,7 @@ def main():
 
                 elif event.key == pygame.K_c and len(selected) > 0:
                     snode = selected[0]
-                    snode.parent.addchild(copy.deepcopy(snode))
+                    snode.parent.addchild(snode.instance())
 
                 elif event.key == pygame.K_p and len(selected) > 1:
                     for i in range(len(selected) - 1):
@@ -888,19 +951,20 @@ def main():
                     break
                 else:
                     sn.setpos(mx,my)
-                
-            setmainprop()
             setfocused()
         elif nmode == "resizing":
             for sn in selected:
                 mx,my = get_mouse_pos()
                 if hasattr(sn,"width") and hasattr(sn,"height"):
-                    offx =  mx - sn.wx
-                    offy = my - sn.wy
+                    offx =  mx - sn.position.x
+                    offy = my - sn.position.y
                     if offx > 0:
                         sn.width = offx
                     if offy > 0:
                         sn.height = offy
+    
+        if guielements.propertieswindow.visible and len(selected) > 0:
+            setproperties(selected[0])
 
         if not gamerunning and not textfocused:
             if keypressed("right"):
@@ -913,6 +977,7 @@ def main():
                 maincamera.translate(0,3)
 
         maincamera.update()
+        maincamera.factorpos()
         mainscene.update(gamerunning)
         manager.update(delta)
         screen.fill((35,35,35))
@@ -943,3 +1008,4 @@ for script in scripts:
         os.remove(script)
 
 pygame.quit()
+sys.exit()
