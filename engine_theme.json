@@ -1,0 +1,14 @@
+{
+    "text_box": {
+        "font": {
+            "name": "cascadia mono",
+            "size": 13,
+            "regular_path": "Cascadia_Mono/CascadiaMono.ttf"
+        },
+
+        "colours": {
+            "normal_text": "#00FF00",
+            "dark_bg": "#000000"
+        }
+    }
+}
