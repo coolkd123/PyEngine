@@ -18,7 +18,7 @@ class GuiElements:
         self.quitbutton = gui.elements.UIButton(pygame.Rect(10,10,100,40),"Exit",self.manager)
 
         self.startbutton = gui.elements.UIButton(pygame.Rect(10,10,100,40),"Start",self.manager,self.utwindow)
-        options = ["node","sprite","camera","movement","background","backgroundimage","rectangle","text","timer","collisionrect"]
+        options = ["node","sprite","camera","movement","background","backgroundimage","rectangle","text","timer","collisionrect","tilemap"]
         self.addobject = gui.elements.UIDropDownMenu(options_list = options, relative_rect = pygame.Rect(120,10,100,40), manager = self.manager, starting_option = "node",container = self.utwindow)
         self.addbutton = gui.elements.UIButton(pygame.Rect(10,60,100,40), "Add Object", self.manager,self.utwindow)
         self.delbutton = gui.elements.UIButton(pygame.Rect(120,60,100,40),"Delete",self.manager,self.utwindow)
@@ -69,7 +69,7 @@ class GuiElements:
                 elif event.ui_element == self.utbutton and not self.utwindow.visible:
                     self.utwindow = gui.elements.UIWindow(pygame.Rect(1000,10,230,140), self.manager, "Utilities", resizable = True)
                     self.startbutton = gui.elements.UIButton(pygame.Rect(10,10,100,40),"Start",self.manager,self.utwindow)
-                    options = ["node","sprite","camera","movement","background","rectangle","text","timer","collisionrect"]
+                    options = ["node","sprite","camera","movement","background","rectangle","text","timer","collisionrect","tilemap"]
                     self.addobject = gui.elements.UIDropDownMenu(options_list = options, relative_rect = pygame.Rect(120,10,100,40), manager = self.manager, starting_option = "node",container = self.utwindow)
                     self.addbutton = gui.elements.UIButton(pygame.Rect(10,60,100,40), "Add Object", self.manager,self.utwindow)
                     self.delbutton = gui.elements.UIButton(pygame.Rect(120,60,100,40),"Delete",self.manager,self.utwindow)
