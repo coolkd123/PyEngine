@@ -10,10 +10,17 @@ from tkinter import filedialog
 from tkinter import simpledialog
 import os
 import random
-import jsonpickle
+import json
 import math
 from types import SimpleNamespace
 import sys
+
+"""
+To do:
+-Add audio system
+-Tilemap tile change system
+-Tile collisions
+"""
 
 pygame.init()
 pygame.font.init()
@@ -30,11 +37,13 @@ scenes = []
 scenenames = []
 nmode = "None"
 cnode = None
+ctileid = None
 colorpicker = None
 selected = []
 textfocused = False
 scripts = {}
-imagenames = {"texture.png": pygame.image.load("texture.png").convert_alpha()}
+imagenames = {"texture.png": pygame.image.load("texture.png").convert_alpha(),
+              "GrapesImage.png": pygame.image.load("GrapesImage.png").convert_alpha()}
 delta = 0
 
 def getsign(number):
@@ -51,6 +60,14 @@ def askinput(title,message):
     root.withdraw()
     userinput = simpledialog.askstring(title = title, prompt = message)
     return userinput
+
+def clamp(value,minval,maxval):
+    return max(minval, min(maxval,value))
+
+# Blank class to add attributes to
+class BlankObj:
+    def __init__(self):
+        pass
 
 #2D Vector data type
 class Vector:
@@ -89,13 +106,60 @@ class Vector:
         return NotImplemented
 
 class DataGrid:
-    def __init__(self,columns,rows,startval = 0):
+    def __init__(self,columns,rows,startval = 1):
         self.grid = [[startval for x in range(columns)] for y in range(rows)]
+        self.width = columns
+        self.height = rows
 
     def get_at(self,x,y):
         return self.grid[y][x]
     def set_at(self,x,y,value):
         self.grid[y][x] = value
+
+    def ingrid(self,x,y):
+        if 0 <= y < len(self.grid):
+            if 0 <= x < len(self.grid[y]):
+                return True
+        return False
+
+    def refresh(self,startval = 1):
+        newgrid = [[startval for x in range(self.width)] for y in range(self.height)]
+        for y in range(self.height):
+            for x in range(self.width):
+                if self.ingrid(x,y):
+                    newgrid[y][x] = self.grid[y][x]
+                else:
+                    newgrid[y][x] = startval
+        self.grid = copy.deepcopy(newgrid)
+
+class TweenObject:
+    def __init__(self, field: str, start, end, timelength, type: str = "Linear"):
+        self.field = field
+        self.start = start
+        self.end = end
+        self.timelength = timelength
+        self.currenttime = 0
+        self.type = type
+
+    def getsimple(self,start,end,ctime,totaltime):
+        if self.type.lower() not in ["linear","in","out"]: errormessage("Easing type of TweenObject must be linear, in, or out")
+
+        ct = clamp(ctime,0,totaltime) / totaltime
+        if self.type.lower() == "in": ct **= 2
+        elif self.type.lower() == "out": ct = 1 - (1 - ct) ** 2
+
+        return start + ct * (end - start)
+
+    def getlerp(self):
+        if (type(self.start) == int or type(self.end) == float) and (type(self.end) == int or type(self.end) == float):
+            return self.getsimple(self.start, self.end, self.currenttime, self.timelength)
+        
+        elif isinstance(self.start, Vector) and isinstance(self.end, Vector):
+            xlerp = self.getsimple(self.start.x, self.end.x, self.currenttime, self.timelength)
+            ylerp = self.getsimple(self.start.y, self.end.y, self.currenttime, self.timelength)
+            return Vector(xlerp,ylerp)
+
+        return None
 
 # Scene class
 class Scene():
@@ -140,7 +204,7 @@ class Node:
         self.name = self.__class__.__name__
         self.children = []
 
-        self.position = Vector(0,0)
+        self.position = Vector(x,y)
         self.subpos = self.position - self.parent.position if self.parent else copy.copy(self.position)
         self.renderpos = self.position + mainscene.maincamera.offsetpos if mainscene.maincamera else copy.copy(self.position)
 
@@ -150,6 +214,9 @@ class Node:
         self.started = False
         self.colliding = False
         self.does_collide = False
+        self.tmapnode = False
+
+        self.tweens = []
 
         if self.parent:
             self.parent.addchild(self)
@@ -157,16 +224,25 @@ class Node:
     def __repr__(self):
         return self.__class__.__name__
     
-    def get_child(self,name):
+    def get_child(self,name: str):
         for child in self.children:
             if child.name == name:
                 return child
+        return None
     
     def get_parent(self):
         return self.parent
 
     def get_children(self):
         return self.children
+    
+    def get_node_from_path(self, nodepath: str):
+        nodenames = filter(None, nodepath.split("/"))
+        currentnode = get_root_node()
+        for nm in nodenames:
+            currentnode = currentnode.get_child(nm)
+            if currentnode is None: return None
+        return currentnode
 
     def update(self):
         if gamerunning:
@@ -193,6 +269,10 @@ class Node:
             if gamerunning:
                 self.translate(self.velocity)
         
+        if isinstance(self,TileMapNode):
+            if self.grid.height != len(self.grid.grid) or self.grid.width != len(self.grid.grid[0]):
+                self.grid.refresh()
+        
         if isinstance(self,TimerNode):
             if gamerunning:
                 self.fulltime += delta * 1000
@@ -204,14 +284,30 @@ class Node:
             else:
                 self.activated = False
                 self.fulltime = 0
+        
+        removetweens = []
+        for tw in self.tweens:
+            if not isinstance(tw,TweenObject): continue
+
+            tw.currenttime += delta * 1000
+            if tw.currenttime >= tw.timelength:
+                removetweens.append(self.tweens.index(tw))
+                continue
+
+            if tw.field == "Position":
+                lerp = tw.getlerp()
+                self.setpos(lerp.x,lerp.y)
+            else:
+                setattr(self, tw.field, tw.getlerp())
+        for idx in removetweens:
+            self.tweens.pop(idx)
+        
+        self.tmapnode = (isinstance(self.parent, TileMapNode) or (self.parent and self.parent.tmapnode))
 
         for child in self.children:
             child.update()
 
     def draw(self):
-        if not gamerunning:
-            pygame.draw.circle(screen, (64,214,237) if (self in selected) else (255,255,255), (self.renderpos.x, self.renderpos.y), 5)
-
         for child in self.children:
             child.draw()
 
@@ -250,40 +346,52 @@ class Node:
         self.position = Vector(x,y)
         self.factorpos(1)
     
+    def createtween(self, start, end, totaltime, field: str, easingtype: str = "Linear"):
+        newtween = TweenObject(field, start, end, totaltime, easingtype)
+        self.tweens.append(newtween)
+    
+    # collide with one rect
+    def onecollide(self, childrect: CollisionRectNode, colliderect):
+        if childrect in self.children:
+            crect = childrect.worldrect
+
+            overlapx = min(crect.right,colliderect.right) - max(crect.left,colliderect.left)
+            overlapy = min(crect.bottom,colliderect.bottom) - max(crect.top,colliderect.top)
+
+            if overlapx < overlapy:
+                if crect.x < colliderect.x:
+                    self.translate(-overlapx, 0)
+                    childrect.collide_dirs.append("right")
+                else:
+                    self.translate(overlapx, 0)
+                    childrect.collide_dirs.append("left")
+            else:
+                if crect.y < colliderect.y:
+                    self.translate(0, -overlapy)
+                    childrect.collide_dirs.append("down")
+                else:
+                    self.translate(0, overlapy)
+                    childrect.collide_dirs.append("up")
+    
     # collide nodes with a hitbox dictated by collisionrectnode
     def collide(self, allrects):
         self.colliding = False
 
         if self.children:
+            noderects = nodetorect(allrects)
+
             for child in self.children:
                 if isinstance(child,CollisionRectNode):
-                    noderects = nodetorect(allrects)
                     childrect = child.worldrect
+                    collisionindexes = pygame.Rect.collidelistall(childrect,noderects)
                     child.collide_dirs = []
 
-                    collisionindexes = childrect.collidelistall(noderects)
-                    for cindex in collisionindexes:
-                        if allrects[cindex] is not child and allrects[cindex].enabled and self.does_collide:
-                            colliderect = noderects[cindex]
-                            overlapx = min(childrect.right,colliderect.right) - max(childrect.left,colliderect.left)
-                            overlapy = min(childrect.bottom,colliderect.bottom) - max(childrect.top,colliderect.top)
-
-                            if overlapx < overlapy:
-                                if childrect.x < colliderect.x:
-                                    self.translate(-overlapx, 0)
-                                    child.collide_dirs.append("right")
-                                else:
-                                    self.translate(overlapx, 0)
-                                    child.collide_dirs.append("left")
-                            else:
-                                if childrect.y < colliderect.y:
-                                    self.translate(0, -overlapy)
-                                    child.collide_dirs.append("down")
-                                else:
-                                    self.translate(0, overlapy)
-                                    child.collide_dirs.append("up")
+                    for index in collisionindexes:
+                        if allrects[index] is not child and allrects[index].enabled:
+                            self.onecollide(child, noderects[index])
 
                     self.colliding = len(child.collide_dirs) > 0
+
         self.factorpos()
     
     # resolve collisions with node and its children
@@ -305,6 +413,8 @@ class Node:
             if self in self.parent.children:
                 self.parent.children.remove(self)
             self.parent = None
+        
+        del self
 
 class SpriteNode(Node):
     def __init__(self, parent = None, x = 0, y = 0, width = 100, height = 100, imagepath = "texture.png"):
@@ -312,12 +422,23 @@ class SpriteNode(Node):
         self.width = width
         self.height = height
         self.imagepath = imagepath
+        self.lastsize = None
+        self.lastimage = None
+        self.cacheimage = None
 
         self.properties.update({"width": int,"height": int,"imagepath": str})
 
+    def get_image(self):
+        size = (self.width,self.height)
+        if self.cacheimage is None or self.lastsize != size or self.lastimage is None or self.lastimage != self.imagepath:
+            self.cacheimage = pygame.transform.smoothscale(imagenames[self.imagepath], size)
+            self.lastsize = size
+            self.lastimage = self.imagepath
+        return self.cacheimage
+
     def draw(self):
         if self.imagepath:
-            screen.blit(pygame.transform.smoothscale(imagenames[self.imagepath], (self.width,self.height)), (self.renderpos.x, self.renderpos.y))
+            screen.blit(self.get_image(), (self.renderpos.x, self.renderpos.y))
 
         super().draw()
 
@@ -330,7 +451,7 @@ class CameraNode(Node):
 class MovementNode(Node):
     def __init__(self, parent = None, x = 0, y = 0, xvel = 0, yvel = 0):
         super().__init__(parent, x, y)
-        self.velocity = Vector(0,0)
+        self.velocity = Vector(xvel,yvel)
         self.properties.update({"xvel": int,"yvel": int})
 
 class BackgroundNode(Node):
@@ -366,7 +487,7 @@ class BackgroundImageNode(Node):
         super().draw()
 
 class RectangleNode(Node):
-    def __init__(self, parent = None, x = 0, y = 0, width = 100, height = 100, color = (255,0,0)):
+    def __init__(self, parent = None, x = 0, y = 0, width = 100, height = 100, color = "#ff0000"):
         super().__init__(parent,x,y)
         self.width = width
         self.height = height
@@ -386,7 +507,7 @@ class TextNode(Node):
         self.properties.update({"text": str,"color": str,"size": int})
     
     def draw(self):
-        drawtext(self.text, self.renderpos.x, self.renderpos.x, self.size, self.color, screen)
+        drawtext(self.text, self.renderpos.x, self.renderpos.y, self.size, self.color, screen)
         super().draw()
 
 class TimerNode(Node):
@@ -419,7 +540,44 @@ class CollisionRectNode(Node):
     def collide_direction(self,direction):
         return direction in self.collide_dirs
 
-def getallrects(node: Node,rectlist):
+class TileMapNode(Node):
+    def __init__(self,parent = None, x = 0, y = 0, width = 10, height = 10, tilewidth = 10, tileheight = 10):
+        super().__init__(parent,x,y)
+        self.grid = DataGrid(width,height,1)
+        self.tilewidth = tilewidth
+        self.tileheight = tileheight
+        self.properties.update({"gridwidth": int, "gridheight": int, "tilewidth": int, "tileheight": int})
+    
+    def get_at(self, x: int, y: int):
+        return self.grid.get_at(x,y)
+
+    def set_at(self, x: int, y: int, value):
+        self.grid.set_at(x,y,value)
+    
+    def worldtotile(self, position: Vector):
+        return worldtotilepos(position, self.position, self.tilewidth, self.tileheight)
+    
+    def draw(self):
+        if len(self.children) == 0: return
+        for child in self.children:
+            child.renderpos.x = self.renderpos.x
+            child.renderpos.y = self.renderpos.y
+
+        for y in range(self.grid.height):
+            for x in range(self.grid.width):
+                tileid = self.grid.get_at(x,y)
+                if type(tileid) != int:
+                    errormessage(f"tile id must be int, not {type(tileid)}")
+
+                if tileid < 0 or tileid - 1 > len(self.children) - 1:
+                    errormessage(f"Tile Id {tileid} not found")
+                    return
+                elif tileid != 0:
+                    tileobj = self.children[tileid - 1]
+                    tileobj.setpos(self.position.x + self.tilewidth * x, self.position.y + self.tileheight * y)
+                    tileobj.draw()
+
+def getallrects(node: Node,rectlist: list):
     if isinstance(node,CollisionRectNode):
         rectlist.append(node)
     for child in node.children:
@@ -429,6 +587,7 @@ def nodetorect(rectlist: list[CollisionRectNode]):
     newlist = []
     for node in rectlist:
         newlist.append(node.worldrect)
+
     return newlist
 
 def getstartcamera(node: Node):
@@ -471,6 +630,26 @@ def searchstring(string,instring):
         if char not in instring:
             return False
     return True
+
+def strtonumber(string: str):
+    try:
+        return int(string)
+    except ValueError:
+        try:
+            return float(string)
+        except ValueError:
+            return None
+    except Exception:
+        return None
+
+def worldtotilepos(position: Vector | tuple, tilemapPos: Vector, tilewidth: int | float, tileheight: int | float):
+    if isinstance(position,Vector):
+        relpos = position - tilemapPos
+        return Vector(math.floor(relpos.x / tilewidth), math.floor(relpos.y / tileheight))
+    else:
+        relpos = Vector(position[0], position[1]) - tilemapPos
+        tpos = Vector(math.floor(relpos.x / tilewidth), math.floor(relpos.y / tileheight))
+        return (tpos.x,tpos.y)
 
 def togglerun():
     global selected
@@ -530,9 +709,8 @@ def changeprop(value: str,convert: str):
 
     sn = selected[0]
     newvalue = value
-    if searchstring(newvalue,"1234567890-.") and len(newvalue) > 0:
-        newvalue = float(newvalue)
-        if newvalue % 1 == 0: newvalue = int(newvalue)
+    if strtonumber(newvalue) is not None:
+        newvalue = strtonumber(newvalue)
     elif newvalue == "True":
         newvalue = True
     elif newvalue == "False":
@@ -554,20 +732,22 @@ def changeprop(value: str,convert: str):
             if convert == "yvel":
                 sn.velocity.y = int(newvalue)
 
+        if convert == "gridwidth" or convert == "gridheight":
+            if convert == "gridwidth":
+                sn.grid.width = int(newvalue)
+            if convert == "gridheight":
+                sn.grid.height = int(newvalue)
+            sn.grid.refresh()
+
         elif convert == "imagepath":
             if newvalue == "None":
                 sn.imagepath = None
             else:
                 oldvalue = sn.imagepath
-
-                try:
+                if newvalue not in imagenames:
+                    errormessage(f"file {newvalue} not found")
+                else:
                     sn.imagepath = newvalue
-                except FileNotFoundError:
-                    errormessage(f"file '{newvalue}' not found")
-                    sn.imagepath = oldvalue
-                except pygame.error:
-                    errormessage("unsupported file format")
-                    sn.imagepath = oldvalue
 
         elif convert == "scriptname":
             if newvalue == "None":
@@ -599,7 +779,7 @@ def addscript(scriptname: str):
             module.random_number = random_number
             module.random_float = random_float
 
-            nodeclasses = SimpleNamespace()
+            nodeclasses = BlankObj()
             for key,value in nodetypes.items():
                 setattr(nodeclasses,key,value)
             module.nodetypes = nodeclasses
@@ -664,6 +844,28 @@ def sceneaction(action):
         else:
             errormessage(f"Scene '{scname}' not found")
 
+def nodetojson(node: Node):
+    props = ["width","height","imagepath","color","text","size","gridwidth","gridheight","tilewidth","tileheight"]
+    jsondict = {
+        "node": [key for key,value in nodetypes.items() if value == node.__class__][0],
+        "parent": node.parent.name if node.parent else None,
+        "name": node.name,
+        "x": node.position.x,
+        "y": node.position.y,
+        "scriptname": node.scriptname,
+        "does_collide": node.does_collide,
+        "children": [nodetojson(child) for child in node.children]
+    }
+
+    for pr in props:
+        if hasattr(node,pr):
+            jsondict.update({pr: getattr(node,pr)})
+    
+    if isinstance(node,MovementNode):
+        jsondict.update({"xvel": node.velocity.x, "yvel": node.velocity.y})
+    
+    return jsondict
+
 funcs = {
     "togglerun": togglerun,
     "deletenode": deletenode,
@@ -677,6 +879,7 @@ funcs = {
     "inscripts": inscripts,
     "sceneaction": sceneaction
 }
+
 nodetypes = {
     "node": Node,
     "sprite": SpriteNode,
@@ -687,10 +890,11 @@ nodetypes = {
     "rectangle": RectangleNode,
     "text": TextNode,
     "timer": TimerNode,
-    "collisionrect": CollisionRectNode
+    "collisionrect": CollisionRectNode,
+    "tilemap": TileMapNode
 }
 
-manager = gui.UIManager((winwidth,winheight))
+manager = gui.UIManager((winwidth,winheight), "engine_theme.json")
 guielements = GuiElements(manager,funcs)
 
 def drawtext(text,x,y,size,color,surface):
@@ -733,6 +937,11 @@ def drawnodetree(node: Node,x,y,clickrects):
     screen.blit(nodetreesurface,(nodetreerect.x,nodetreerect.y))
     return currenty + 15
 
+def drawnodemarkers(node: Node):
+    if not gamerunning and not node.tmapnode:
+        pygame.draw.circle(screen, (64,214,237) if (node in selected) else "#ffffff" , (node.renderpos.x,node.renderpos.y), 5)
+        for child in node.children: drawnodemarkers(child)
+
 def startprop(node: Node):
     objprop = list(node.properties.keys())[:]
 
@@ -757,6 +966,10 @@ def startprop(node: Node):
             objprop[i] = node.velocity.x
         elif objprop[i] == "yvel":
             objprop[i] = node.velocity.y
+        elif objprop[i] == "gridwidth":
+            objprop[i] = node.grid.width
+        elif objprop[i] == "gridheight":
+            objprop[i] = node.grid.height
         else:
             objprop[i] = getattr(node,proptext)
 
@@ -800,6 +1013,10 @@ def setproperties(node: Node):
                 textset = node.velocity.x
             elif propname == "yvel":
                 textset = node.velocity.y
+            elif propname == "gridwidth":
+                textset = node.grid.width
+            elif propname == "gridheight":
+                textset = node.grid.height
             else:
                 textset = getattr(node,propname)
             textset = str(textset)
@@ -855,6 +1072,7 @@ def main():
     global delta
     global mainscene
     global nmode
+    global ctileid
 
     while running:
         delta = clock.tick(60) / 1000.0
@@ -882,7 +1100,7 @@ def main():
                     filename = askfile()
                     changeprop(filename,"imagepath")
 
-            if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.type == pygame.MOUSEBUTTONDOWN and not gamerunning:
                 if event.button == 3:
                     for rect,node in clickrects.items():
                         temprect = pygame.Rect(rect)
@@ -905,7 +1123,7 @@ def main():
                             setmainprop()
                             setfocused()
             
-            elif event.type == pygame.KEYUP and not textfocused:
+            elif event.type == pygame.KEYUP and not textfocused and not gamerunning:
                 if event.key == pygame.K_m and len(selected) > 0:
                     if nmode == "moving":
                         nmode = "None"
@@ -925,6 +1143,8 @@ def main():
                 
                 elif event.key == pygame.K_f:
                     guielements.colorpicker = gui.windows.UIColourPickerDialog(pygame.Rect(300,200,390,390), guielements.manager, initial_colour = pygame.Color(255,0,0))
+                    with open("scene.json","w") as file:
+                        file.write(json.dumps(nodetojson(get_root_node())))
 
                 elif event.key == pygame.K_d and len(selected) > 0:
                     for sn in selected:
@@ -941,6 +1161,10 @@ def main():
                         nmode = "None"
                     else:
                         nmode = "resizing"
+                
+                elif event.key == pygame.K_t:
+                    ti = askinput("select tile", "Tile ID to set tiles to: ")
+                    if ti is not None and ti.isdigit(): ctileid = int(ti)
 
         if nmode == "moving":
             mx,my = get_mouse_pos()
@@ -975,6 +1199,14 @@ def main():
                 maincamera.translate(0,-3)
             if keypressed("down"):
                 maincamera.translate(0,3)
+            
+            if keypressed("r") and ctileid is not None and selected:
+                mx,my = get_mouse_pos()
+                mousepos = Vector(mx,my)
+                for node in selected:
+                    if isinstance(node,TileMapNode):
+                        tilepos = node.worldtotile(mousepos)
+                        node.set_at(tilepos.x, tilepos.y, ctileid)
 
         maincamera.update()
         maincamera.factorpos()
@@ -982,10 +1214,11 @@ def main():
         manager.update(delta)
         screen.fill((35,35,35))
         mainscene.draw()
+        drawnodemarkers(get_root_node())
         manager.draw_ui(screen)
 
         if guielements.nodetreewindow.visible:
-            drawnodetree(mainscene.rootnode, 30, 50,clickrects)
+            drawnodetree(get_root_node(), 30, 50,clickrects)
         
         drawtext(f"Current Scene: {mainscene.name}", winwidth - 200, 10, 15, (255,255,255), screen)
         snodetext = selected[0].name if len(selected) == 1 else ("None" if not selected else "Multiple")
@@ -1003,9 +1236,9 @@ def main():
 if __name__ == "__main__":
     main()
 
-for script in scripts:
-    if os.path.exists(script):
-        os.remove(script)
+    for script in scripts:
+        if os.path.exists(script):
+            os.remove(script)
 
-pygame.quit()
-sys.exit()
+    pygame.quit()
+    sys.exit()
